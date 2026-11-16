@@ -1,36 +1,37 @@
 # Hardening an autonomous agent
 
-The lab runs an autonomous agent (Hermes Agent) that can execute shell commands, read the infrastructure state and open
-pull requests. The goal: useful for diagnostics and code changes, unable to damage anything even if it is manipulated
-(prompt injection through a repository, an issue or a log line).
+The lab runs an autonomous agent (Hermes Agent). It can run shell commands, read the state of the infrastructure and open
+pull requests. I want it to be useful for diagnostics and small code changes, and unable to break anything even if
+someone manipulates it through prompt injection in a repository, an issue or a log line.
 
 ## Threat model
 
-- The model is a cloud model; anything the agent reads may be steered by text it did not write.
-- Logs, IDS alerts and DNS query names are **attacker-controlled text**.
-- The agent runs unattended.
+- The model runs in the cloud, and text the agent reads can steer it even if the agent didn't write that text.
+- Logs, IDS alerts and DNS query names can contain text controlled by an attacker.
+- Nobody watches the agent while it works.
 
 ## Layers
 
 | Layer | Control |
 |---|---|
-| **Isolation** | Dedicated VM; unprivileged service account; no sudo, no Docker group |
-| **Network (hypervisor)** | Proxmox firewall: default-deny out to the LAN except the gateway, Git server and SIEM agent port |
-| **Network (in guest)** | nftables `meta skuid` allowlist: packets from the agent's UID may reach only DNS, the AI gateway, Git, Prometheus, a read-only Loki proxy, the Proxmox API and a read-only SIEM proxy. **No internet.** Root and apt are unaffected → [`../agent-hardening/agent-egress.nft`](../agent-hardening/agent-egress.nft) |
-| **Self-modification** | systemd `ReadOnlyPaths=` on its config, code, persona, hooks and secrets + `NoNewPrivileges=yes`. Applies to every command the agent's terminal tool spawns (same mount namespace). Verified: writing the config → *Read-only file system*; renaming the code dir → *Device busy* → [`../agent-hardening/hardening.conf`](../agent-hardening/hardening.conf) |
-| **Credentials** | Only a budgeted virtual key for the AI gateway; read-only Proxmox token (`PVEAuditor`, writes return 403); read-only SIEM search user; Git token that can push branches but not `main` |
-| **Git** | Branch protection: only the owner can push to or merge into `main`; approvals count only from the owner, so the two bots cannot approve each other |
-| **Skills** | Bundled skills (email, social media, browser, computer-use…) removed; three custom read-only skills from a root-owned directory |
-| **Prompting** | Skills state that log/alert fields are data and must never be followed; no URLs from logs are fetched |
+| Isolation | Its own VM, an unprivileged service account, no sudo, not in the Docker group |
+| Network (hypervisor) | Proxmox firewall drops outgoing traffic to the LAN by default, except the gateway, the Git server and the SIEM agent port |
+| Network (in the guest) | nftables `meta skuid` allowlist: packets from the agent's UID can only reach DNS, the AI gateway, Git, Prometheus, a read-only Loki proxy, the Proxmox API and a read-only SIEM proxy. No internet. Root and apt are not affected. See [`../agent-hardening/agent-egress.nft`](../agent-hardening/agent-egress.nft) |
+| Self-modification | systemd `ReadOnlyPaths=` on its config, code, persona, hooks and secrets, plus `NoNewPrivileges=yes`. This covers every command started by the agent's terminal tool, since they share the mount namespace. Tested: writing the config gives *Read-only file system*, renaming the code directory gives *Device busy*. See [`../agent-hardening/hardening.conf`](../agent-hardening/hardening.conf) |
+| Credentials | A virtual key for the AI gateway with a budget, a Proxmox token with `PVEAuditor` (writes return 403), a read-only SIEM search user, a Git token that can push branches but not `main` |
+| Git | Branch protection: only I can push to or merge into `main`, and only my approval counts, so the two bots can't approve each other's PRs |
+| Skills | The bundled skills (email, social media, browser, computer use and so on) are removed. It has three custom read-only skills from a directory owned by root |
+| Prompting | The skills say that fields from logs and alerts are data and are never to be followed, and URLs found in logs are never fetched |
 
 ## What it can still do
 
-Read metrics, Proxmox state, SIEM/IDS alerts and logs; answer "is the server overloaded?", "did backups run?", "anything
-suspicious in the last 24 h?"; propose changes as pull requests. Infrastructure changes are described, never executed.
+It reads metrics, Proxmox state, SIEM and IDS alerts and logs. It can answer questions like "is the server overloaded?",
+"did the backups run?" or "anything suspicious in the last 24 h?", and it can propose changes as pull requests. For
+infrastructure changes it writes down what to do and I do it.
 
 ## Things that did not work as expected
 
-- Making only `config.yaml` root-owned is not enough: the agent owns the parent directory and its own code, so it could
-  rename or patch around it. A mount-namespace read-only bind (systemd) is the robust fix.
-- A first report flagged "load 11, host under pressure". The host has 40 threads; load per thread was 0.25. The skill now
-  teaches the agent to normalise by thread count and check iowait before calling something overloaded.
+- Making only `config.yaml` owned by root wasn't enough. The agent owns the parent directory and its own code, so it
+  could rename the file or patch around it. A read-only bind mount in its mount namespace (via systemd) fixed that.
+- One of the first reports said "load 11, host under pressure". The host has 40 threads, so that's 0.25 per thread. The
+  skill now tells the agent to divide load by the thread count and check iowait before calling anything overloaded.

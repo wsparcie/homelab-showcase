@@ -1,10 +1,10 @@
 # Nightly configuration export with secret redaction
 
-Every config file that matters — Proxmox `/etc/pve`, firewall rules, compose files and Portainer stacks, app configs,
-SIEM/IDS configs, systemd units, a Docker inventory per host — is exported every day into a private Git repository.
-Git history becomes a changelog of the whole lab, and any service can be rebuilt from it.
+Every day the config of the lab goes into a private Git repository: Proxmox `/etc/pve`, firewall rules, compose files and
+Portainer stacks, app configs, SIEM and IDS configs, systemd units and a Docker inventory for each host. The git history
+works as a changelog of the whole lab, and I can rebuild any service from it.
 
-The hard part is not collecting files; it is making sure **no secret ever reaches the repository**.
+Collecting the files was easy. Most of the work went into making sure no secret ends up in the repository.
 
 ## Pipeline
 
@@ -19,31 +19,32 @@ flowchart LR
   E -->|finding| X
 ```
 
-- **Collection** ([`collect-files.sh`](../config-export/collect-files.sh)) runs *inside* each guest: an explicit list of
-  config paths per service (not whole data directories), small text files only, with caches, databases, certificates,
-  keys and dependency trees pruned. Containers are reached with `pct exec`, VMs through the QEMU guest agent
-  (base64-encoded tar in the agent's JSON output — no SSH needed).
-- **Docker inventory** ([`docker-inventory.sh`](../config-export/docker-inventory.sh)) records image, ports, mounts,
-  networks and environment for containers started without a compose file.
-- **Redaction** ([`redact.py`](../config-export/redact.py)) keeps structure and key names, replaces values:
-  secret-looking key names in env/YAML/JSON/XML/INI, credentials in URLs, Authorization headers, well-known token
-  formats (`sk-…`, `ghp_…`, JWTs, PEM private keys…), high-entropy strings and hex API keys. Key files, databases and
-  binaries are dropped.
-- **Three gates**: the redaction patterns must no longer match, an entropy scanner ([`scan.py`](../config-export/scan.py))
-  and [gitleaks](https://github.com/gitleaks/gitleaks). Any finding aborts the run; nothing is committed.
-- **Publishing** uses a deploy key with write access to that single repository; a systemd timer runs it daily.
+- [`collect-files.sh`](../config-export/collect-files.sh) runs inside each guest. It has a fixed list of config paths
+  for each service (not whole data directories) and takes only small text files. Caches, databases, certificates, keys
+  and dependency trees are skipped. Containers are reached with `pct exec` and VMs through the QEMU guest agent, which
+  returns the tar base64-encoded in its JSON output, so SSH isn't needed.
+- [`docker-inventory.sh`](../config-export/docker-inventory.sh) records image, ports, mounts, networks and environment
+  of containers that were started without a compose file.
+- [`redact.py`](../config-export/redact.py) keeps the structure and the key names and replaces the values. It looks for
+  key names that suggest a secret in env, YAML, JSON, XML and INI files, credentials in URLs, Authorization headers,
+  known token formats (`sk-…`, `ghp_…`, JWTs, PEM private keys and others), high-entropy strings and hex API keys. Key
+  files, databases and binaries are dropped.
+- After redaction three checks run: the redaction patterns must not match anything any more, then an entropy scanner
+  ([`scan.py`](../config-export/scan.py)), then [gitleaks](https://github.com/gitleaks/gitleaks). If any of them finds
+  something, the run stops and nothing is committed.
+- The push uses a deploy key that can write only to this one repository. A systemd timer runs the job daily.
 
-## Lessons (from an actual incident)
+## What went wrong the first time
 
-The first export passed my own two gates and still pushed real API keys. gitleaks caught them on the next run.
+The first export passed both of my own checks and still pushed real API keys. gitleaks found them on the next run.
 
-- **Hex keys defeat entropy checks.** A 32-char hex API key has at most 4 bits/char of entropy; a 4.2 threshold that
-  works for base64 secrets misses every hex key. Treat 32/48/96-hex tokens as secrets explicitly (40/64 stay allowed:
-  those are SHA-1/SHA-256 digests).
-- **Bare key names matter.** Homepage widgets use `key:`; Mylar uses `comicvine_api`. Name-based rules need the short
-  forms, guarded so `keyboard` or `monkey` do not match.
-- **Use an independent scanner as the last gate.** Your own rules share your blind spots.
-- **Fix history, don't just fix HEAD.** The leaked commit was replaced (force-push) and unreachable objects pruned
-  on both sides (`git reflog expire` + `git gc --prune=now`), before anyone cloned the repo.
-- **Previews leak too.** While debugging, a "masked" preview that kept the first characters of each value showed real
-  password prefixes. Masks now show only file, line, length and a character-class shape (`a…9-A…`).
+- Entropy checks miss hex keys. A 32-character hex API key has at most 4 bits of entropy per character, so a threshold
+  of 4.2 that works for base64 secrets misses all of them. Hex tokens of 32, 48 or 96 characters are now treated as
+  secrets. 40 and 64 are still allowed because those are SHA-1 and SHA-256 digests.
+- Short key names matter. Homepage widgets use `key:` and Mylar uses `comicvine_api`. The name rules had to cover the
+  short forms without matching words like `keyboard` or `monkey`.
+- The last check should be a scanner I didn't write. My own rules have the same blind spots I do.
+- Fixing HEAD isn't enough, the history has to be fixed too. I replaced the leaked commit with a force-push and pruned
+  the unreachable objects on both sides (`git reflog expire` and `git gc --prune=now`) before anyone had cloned the repo.
+- Debug output can leak as well. A "masked" preview that kept the first few characters of each value showed the real
+  beginnings of passwords. The output now shows only file, line, length and the character classes (`a…9-A…`).
