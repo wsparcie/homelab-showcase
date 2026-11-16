@@ -1,0 +1,20 @@
+# Extra modules in blackbox_exporter's config.yml (next to the default http_2xx).
+modules:
+  http_health_ok:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      fail_if_body_not_matches_regexp: ['(?i)"status"\s*:\s*("ok"|"pass"|"up"|true)']
+  http_backend_alive:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200, 401, 403, 404]
+      fail_if_not_ssl: true
+      fail_if_body_not_matches_regexp: ['"statusCode"\s*:']   # a JSON error from the backend, not the proxy's 502 page

@@ -1,0 +1,33 @@
+#!/bin/bash
+# Hypervisor, weekly: report which pinned images have a newer image under the same tag in their registry.
+# Writes /root/image-updates/report-<date>.md, a Prometheus textfile metric, and posts to Discord when
+# /root/discord-updates-webhook exists. Nothing is pulled or upgraded: see README.md for the procedure.
+set -uo pipefail
+exec 9>/run/image-updates.lock; flock -n 9 || { echo "another run is active"; exit 0; }
+OUT=/root/image-updates; install -d -m 700 $OUT
+R=$OUT/report-$(date +%F).md; PROM=/var/lib/prometheus/node-exporter/image_updates.prom
+{ echo "# Image updates $(date +%F)"; echo; } > $R
+echo "# HELP image_updates_available Pinned images with a newer image under the same tag." > $PROM.tmp
+total=0
+for ct in ${DOCKER_HOSTS:-101 102 103}; do   # container IDs of the Docker hosts
+  pct push $ct /usr/local/lib/image-check.py /root/image-check.py >/dev/null 2>&1 || continue
+  res=$(pct exec $ct -- python3 /root/image-check.py 2>/dev/null); pct exec $ct -- rm -f /root/image-check.py
+  n=$(echo "$res" | python3 -c 'import sys,json; print(sum(1 for l in sys.stdin if l.strip() and json.loads(l).get("update")))')
+  total=$((total+n)); echo "image_updates_available{host=\"ct$ct\"} $n" >> $PROM.tmp
+  echo "## container $ct: $n update(s)" >> $R
+  echo "$res" | python3 /usr/local/lib/image-format.py >> $R
+  echo >> $R
+done
+mv $PROM.tmp $PROM
+echo "Total: $total" >> $R
+if [ -s /root/discord-updates-webhook ]; then
+  python3 - "$R" <<'PY'
+import json, sys, urllib.request
+text = open(sys.argv[1]).read()
+url = open("/root/discord-updates-webhook").read().strip()
+for i in range(0, len(text), 1900):
+    req = urllib.request.Request(url, data=json.dumps({"content": text[i:i+1900]}).encode(), headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=20)
+PY
+fi
+echo "report: $R ($total updates)"

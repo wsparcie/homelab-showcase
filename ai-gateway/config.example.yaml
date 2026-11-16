@@ -1,0 +1,90 @@
+# LiteLLM proxy config (excerpt). Provider keys come from the container's .env; clients get virtual keys.
+model_list:
+  # --- paid cloud models: explicit prices so per-key budgets are exact ---
+  - model_name: deepseek-pro
+    litellm_params: {model: deepseek/deepseek-v4-pro, api_key: os.environ/DEEPSEEK_API_KEY}
+  - model_name: deepseek-flash
+    litellm_params: {model: deepseek/deepseek-v4-flash, api_key: os.environ/DEEPSEEK_API_KEY}
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      additional_drop_params: ["temperature", "top_p", "top_k"]   # the model rejects sampling params
+    model_info: {input_cost_per_token: 0.000002, output_cost_per_token: 0.00001}
+
+  # --- local models on a CPU-only Ollama VM: private and free, slow ---
+  - model_name: local-qwen
+    litellm_params: {model: ollama_chat/qwen2.5:14b, api_base: http://192.0.2.40:11434, timeout: 900}
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+  - model_name: local-pllum          # Polish LLM (PLLuM 12B, Apache 2.0) from a community GGUF
+    litellm_params: {model: "ollama_chat/hf.co/mradermacher/PLLuM-12B-chat-2512-GGUF:Q4_K_M", api_base: http://192.0.2.40:11434, timeout: 900}
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+
+  # --- free tiers: may train on prompts, never granted to agent keys ---
+  - model_name: free-gemini-flash
+    litellm_params: {model: gemini/gemini-3.8-flash, api_key: os.environ/GEMINI_API_KEY, timeout: 60, num_retries: 0}  # stalls under load
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+  - model_name: free-gemini-lite
+    litellm_params: {model: gemini/gemini-3.5-flash-lite, api_key: os.environ/GEMINI_API_KEY}
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+  - model_name: free-groq-gpt-oss
+    litellm_params: {model: groq/openai/gpt-oss-120b, api_key: os.environ/GROQ_API_KEY}
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+  - model_name: free-nim-mistral-large
+    litellm_params: {model: nvidia_nim/mistralai/mistral-large-4-1t-a52b, api_key: os.environ/NVIDIA_NIM_API_KEY, timeout: 60}
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+  - model_name: free-or-gemma
+    litellm_params: {model: "openrouter/google/gemma-4-31b-it:free", api_key: os.environ/OPENROUTER_API_KEY}   # key with $0 credit limit
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+
+  # --- one-click choices ---
+  - model_name: free-auto            # fastest free model first, fallbacks below
+    litellm_params: {model: groq/openai/gpt-oss-120b, api_key: os.environ/GROQ_API_KEY, timeout: 30, num_retries: 0}
+    model_info: {input_cost_per_token: 0, output_cost_per_token: 0}
+  - model_name: smart-auto           # complexity router: free models for most prompts, paid model for hard reasoning
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: heuristic_first      # local scorer settles clear SIMPLE prompts, an LLM classifies the rest
+        heuristic_first_max_tier: SIMPLE
+        classifier_llm_config: {model: free-groq-gpt-oss, reasoning_effort: low}
+        default_model: free-auto
+        tiers:
+          SIMPLE: free-auto
+          MEDIUM: free-groq-gpt-oss
+          COMPLEX: free-nim-mistral-large
+          REASONING: deepseek-pro
+
+# --- read-only infrastructure tools (see docs/mcp.md) ---
+mcp_servers:
+  grafana:
+    url: http://192.0.2.60:8090/grafana/mcp
+    transport: http
+    auth_type: bearer_token
+    auth_value: os.environ/MCP_PROXY_TOKEN
+    allowed_tools: [list_datasources, query_prometheus, list_prometheus_metric_names, list_prometheus_label_values,
+      query_loki_logs, query_loki_stats, list_loki_label_names, search_dashboards, get_dashboard_summary, alerting_rules_read]
+  homelab:
+    url: http://192.0.2.60:8090/homelab/mcp
+    transport: http
+    auth_type: bearer_token
+    auth_value: os.environ/MCP_PROXY_TOKEN
+
+litellm_settings:
+  drop_params: true
+  request_timeout: 600
+
+router_settings:
+  num_retries: 2
+  fallbacks:
+    - deepseek-pro: ["deepseek-flash"]
+    - free-gemini-flash: ["free-gemini-lite"]
+    - free-auto: ["free-gemini-lite", "free-nim-mistral-large", "free-or-gemma"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  disable_env_credential_login: true        # UI login with personal accounts only
+  # NOTE: a key with no MCP setting sees ALL MCP servers; set object_permission.mcp_servers on every key
+  # (["no-mcp-servers"] where none are wanted). This flag only stops inheritance from teams.
+  require_key_mcp_access_defined: true

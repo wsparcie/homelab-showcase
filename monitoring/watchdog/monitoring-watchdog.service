@@ -1,0 +1,6 @@
+[Unit]
+Description=Dead-man's switch: ping healthchecks.io when the monitoring stack is healthy
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/monitoring-watchdog

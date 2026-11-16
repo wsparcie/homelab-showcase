@@ -1,0 +1,22 @@
+#!/usr/sbin/nft -f
+# Egress allowlist for the `hermes` account (uid of every process the Hermes gateway and its terminal
+# tool start). Root, apt and the `claude` Aider account are not affected. Loaded by hermes-egress.service.
+destroy table inet hermes_egress
+table inet hermes_egress {
+    chain output {
+        type filter hook output priority filter; policy accept;
+        meta skuid "hermes" jump hermes_out
+    }
+    chain hermes_out {
+        oifname "lo" accept
+        ct state established,related accept
+        ip daddr 192.0.2.2 meta l4proto { tcp, udp } th dport 53 accept   # DNS (AdGuard)
+        ip daddr 192.0.2.71 tcp dport 4000 accept                          # LiteLLM gateway (model calls)
+        ip daddr 192.0.2.11 tcp dport { 443, 3022 } accept                 # Gitea (git.example.lan via NPM, direct)
+        ip daddr 192.0.2.60 tcp dport { 9090, 3101 } accept                # Prometheus, read-only Loki proxy
+        ip daddr 192.0.2.10 tcp dport 8006 accept                          # Proxmox API (PVEAuditor token)
+        ip daddr 192.0.2.80 tcp dport 9201 accept                          # read-only Wazuh alert proxy
+        limit rate 6/minute log prefix "hermes-egress-drop " level info
+        counter drop
+    }
+}

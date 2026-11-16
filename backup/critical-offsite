@@ -1,0 +1,75 @@
+#!/bin/bash
+# Daily off-site copy of the small, critical state (restic tag "critical") to the second-site repository that the
+# weekly full off-site backup also uses. Weekly full runs stay as they are; this narrows the worst-case loss for these
+# services from 7 days to 1 day.
+#
+#   Gitea        own container, /opt/gitea/data   (repositories + SQLite DB, WAL)
+#   Vaultwarden  own container, /opt/vaultwarden  (SQLite DB, WAL, RSA key, compose + .env)
+#   LiteLLM      gateway container, /opt/litellm  (.env with provider keys, config) + pg_dump of its DB
+#   Open WebUI   /root/backups/openwebui        (daily copy made by openwebui-backup at 07:40)
+#
+# Consistency: an atomic ZFS snapshot of each container's root dataset is read instead of the live files, so the
+# SQLite databases are crash-consistent without stopping anything. Snapshot names are fixed so restic sees the same
+# paths every day (deduplication, parent snapshot detection).
+set -uo pipefail
+export RESTIC_REPOSITORY=/mnt/offsite/restic
+export RESTIC_PASSWORD_FILE=/root/.restic-offsite
+export RESTIC_CACHE_DIR=/root/.cache/restic
+SNAP=critical-offsite
+# ZFS datasets of the containers (root filesystems) and the gateway's container ID
+DS_GIT=rpool/data/subvol-201-disk-0; DS_VAULT=rpool/data/subvol-202-disk-0; DS_LLM=rpool/data/subvol-203-disk-0; LLM_CT=203
+STAGE=/root/backups/critical
+PROM=/var/lib/prometheus/node-exporter/critical_offsite.prom
+START=$(date +%s)
+# Dead-man's switch (healthchecks.io): /start now, exit code at the end; a missing ping raises an alert off-site.
+HC_URL=$(sed -n 's/^HC_CRITICAL=//p' /root/healthchecks.env 2>/dev/null)
+hc_ping() { [ -n "$HC_URL" ] && curl -fsS -m 10 --retry 3 -o /dev/null "$HC_URL$1" || true; }
+hc_ping /start
+FAILED=0
+
+metric() {
+  { echo "# HELP critical_offsite_last_exit_code 0 when the last daily critical off-site backup succeeded."
+    echo "critical_offsite_last_exit_code $1"
+    echo "critical_offsite_last_run_timestamp_seconds $START"
+    echo "critical_offsite_last_duration_seconds $(( $(date +%s) - START ))"
+    if [ "$1" = 0 ]; then echo "critical_offsite_last_success_timestamp_seconds $(date +%s)"
+    else grep '^critical_offsite_last_success' "$PROM" 2>/dev/null || true; fi
+  } > "$PROM.tmp"; mv "$PROM.tmp" "$PROM"
+}
+metric_and_ping() { metric "$1"; hc_ping "/$1"; }
+cleanup() {
+  for ds in $DS_GIT $DS_VAULT $DS_LLM; do zfs destroy "$ds@$SNAP" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+
+ls /mnt/offsite >/dev/null 2>&1   # trigger the automount
+if ! mountpoint -q /mnt/offsite; then echo "!! /mnt/offsite is not mounted"; metric_and_ping 2; exit 2; fi
+
+cleanup
+zfs snapshot $DS_GIT@$SNAP $DS_VAULT@$SNAP $DS_LLM@$SNAP || { echo "!! zfs snapshot failed"; metric_and_ping 1; exit 1; }
+GIT=/$DS_GIT/.zfs/snapshot/$SNAP
+LLM=/$DS_LLM/.zfs/snapshot/$SNAP
+VAULT=/$DS_VAULT/.zfs/snapshot/$SNAP
+
+install -d -m 700 "$STAGE"
+pct exec "$LLM_CT" -- docker exec litellm-db-1 pg_dump -U litellm -d litellm --no-owner | gzip -6 > "$STAGE/litellm-db.sql.gz.tmp" \
+  && [ -s "$STAGE/litellm-db.sql.gz.tmp" ] && mv "$STAGE/litellm-db.sql.gz.tmp" "$STAGE/litellm-db.sql.gz" \
+  || { echo "!! pg_dump of the LiteLLM database failed"; FAILED=1; }
+chmod 600 "$STAGE"/*.gz 2>/dev/null
+
+OWUI=$(ls -1t /root/backups/openwebui/openwebui-*.tar.gz 2>/dev/null | head -1)
+
+restic unlock >/dev/null 2>&1
+restic backup --tag critical --host hypervisor --no-scan \
+  --exclude "$GIT/opt/gitea/data/gitea/log" --exclude "$GIT/opt/gitea/data/gitea/indexers" \
+  --exclude "$GIT/opt/gitea/data/gitea/queues" --exclude "$GIT/opt/gitea/data/gitea/tmp" \
+  --exclude "$LLM/opt/litellm/*.bak*" \
+  "$GIT/opt/gitea/data" "$VAULT/opt/vaultwarden" "$LLM/opt/litellm" "$STAGE" ${OWUI:+"$OWUI"} \
+  || { echo "!! restic backup failed"; FAILED=1; }
+
+restic forget --tag critical --group-by host,tags --keep-daily 14 --keep-weekly 8 --keep-monthly 6 >/dev/null \
+  || { echo "!! restic forget failed"; FAILED=1; }
+
+metric_and_ping $FAILED
+echo "== critical off-site done, exit $FAILED, $(( $(date +%s) - START )) s"
+exit $FAILED

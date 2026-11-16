@@ -1,0 +1,9 @@
+# Bearer check in front of both MCP servers; the secret lives only here and in LiteLLM's .env (MCP_PROXY_TOKEN).
+server {
+    listen 8080;
+    client_max_body_size 1m;
+    if ($http_authorization != "Bearer __MCP_PROXY_TOKEN__") { return 401; }
+    location /grafana/ { proxy_pass http://grafana-mcp:8000/; proxy_set_header Host localhost:8000; proxy_http_version 1.1; proxy_buffering off; proxy_read_timeout 120s; }
+    location /homelab/ { proxy_pass http://homelab-mcp:8001/; proxy_http_version 1.1; proxy_buffering off; proxy_read_timeout 120s; }
+    location / { return 404; }
+}

@@ -1,0 +1,8 @@
+# gitleaks: default rules plus the redaction placeholder and env references. Add reviewed non-secrets
+# (public keys, IDs) with regexTarget = "line" entries.
+title = "homelab export"
+[extend]
+useDefault = true
+[allowlist]
+regexTarget = "line"
+regexes = ['''<REDACTED>''', '''\$\{[A-Z0-9_]+\}''', '''os\.environ/[A-Z0-9_]+''']

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily off-site backup of critical state (Gitea, Vaultwarden, LiteLLM, Open WebUI) to the off-site restic repo
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/critical-offsite
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h

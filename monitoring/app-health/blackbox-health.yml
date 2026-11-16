@@ -1,0 +1,16 @@
+# App health probes, one group per blackbox module (Prometheus file_sd, job "blackbox-health").
+# Probes go through the reverse proxy, the same path users take. Hostnames below are examples.
+- labels: {module: http_health_ok}      # health endpoint must report ok/pass
+  targets:
+    - https://git.example.home/api/healthz
+    - https://chat.example.home/health
+    - https://finance.example.home/health
+- labels: {module: http_2xx}            # status code is enough (endpoint has no JSON status)
+  targets:
+    - https://vault.example.home/alive
+    - https://llm.example.home/health/liveliness
+    - https://cloud.example.home/status.php
+    - https://photos.example.home/api/server/ping
+- labels: {module: http_backend_alive}  # any answer from the app itself, e.g. an API that wants auth
+  targets:
+    - https://api.example.home/v1/

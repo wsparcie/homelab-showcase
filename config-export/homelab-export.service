@@ -1,0 +1,11 @@
+[Unit]
+Description=Export homelab configuration to Gitea (you/homelab, live/)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/homelab-export/export.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min

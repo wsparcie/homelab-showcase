@@ -1,0 +1,27 @@
+# Read-only MCP servers for the LiteLLM MCP gateway. Deployed next to the monitoring stack.
+# Only the auth proxy is published; it requires the bearer secret that only LiteLLM holds.
+services:
+  grafana-mcp:
+    image: grafana/mcp-grafana:2.1.1
+    restart: unless-stopped
+    command: ["-t", "streamable-http", "--address", "0.0.0.0:8000", "--disable-write"]
+    env_file: [grafana-mcp.env]          # GRAFANA_URL, GRAFANA_SERVICE_ACCOUNT_TOKEN (Viewer), mode 600
+    networks: [monitoring_default]
+  homelab-mcp:
+    build: ./homelab-mcp
+    restart: unless-stopped
+    secrets: [pve_token]
+    networks: [monitoring_default]
+  mcp-auth:
+    image: nginx:1.28.0-alpine
+    restart: unless-stopped
+    ports: ["8090:8080"]
+    volumes: ["./mcp-auth.conf:/etc/nginx/conf.d/default.conf:ro"]
+    networks: [monitoring_default]
+    depends_on: [grafana-mcp, homelab-mcp]
+secrets:
+  pve_token:
+    file: ./pve-token                    # mcp@pve!readonly=<uuid>, mode 600
+networks:
+  monitoring_default:
+    external: true

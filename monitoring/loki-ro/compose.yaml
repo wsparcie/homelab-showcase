@@ -1,0 +1,12 @@
+# Read-only Loki for the agent VM: GET on query/label/series endpoints only. No push, no delete.
+# Separate project so the monitoring stack's compose file stays untouched.
+services:
+  loki-ro:
+    image: nginx:1.28.0-alpine
+    restart: unless-stopped
+    ports: ["3101:8080"]
+    volumes: ["./nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
+    networks: [monitoring_default]
+networks:
+  monitoring_default:
+    external: true
