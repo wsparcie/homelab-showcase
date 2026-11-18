@@ -1,0 +1,19 @@
+# Proxmox firewall for the CI runner VM (/etc/pve/firewall/<vmid>.fw). CI jobs run code from pull requests,
+# so the VM gets DNS and the Git server, the internet for packages, and nothing else on the LAN.
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+IN SSH(ACCEPT) -source 192.0.2.128/25 -log nolog # admin from the management VLAN
+IN ACCEPT -p icmp -log nolog
+OUT ACCEPT -dest 192.0.2.2 -p udp -dport 53 -log nolog # DNS
+OUT ACCEPT -dest 192.0.2.2 -p tcp -dport 53 -log nolog
+OUT ACCEPT -dest 192.0.2.11 -p tcp -dport 443 -log nolog # Git server via the reverse proxy
+OUT DROP -dest 10.0.0.0/8 -log nolog # no LAN, VPN or tailnet
+OUT DROP -dest 172.16.0.0/12 -log nolog
+OUT DROP -dest 192.168.0.0/16 -log nolog
+OUT DROP -dest 100.64.0.0/10 -log nolog
+OUT DROP -dest 169.254.0.0/16 -log nolog
+OUT DROP -dest 192.0.2.0/24 -log nolog

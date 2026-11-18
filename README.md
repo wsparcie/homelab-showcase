@@ -11,6 +11,9 @@ names here are placeholders.
   read-only MCP gateway.
 - [`docs/agent-hardening.md`](docs/agent-hardening.md): how the autonomous agent is locked down. No internet, read-only
   data access, no privilege escalation, it can't edit its own config or code, and changes go through pull requests.
+- [`docs/agent-workspaces.md`](docs/agent-workspaces.md): Coder workspaces where a coding agent brings an app up from
+  scratch with its own database, cache, fake mail server and headless browser, behind an egress firewall, with gitleaks
+  hooks, PRs only, and CI on a runner VM that can't reach the LAN.
 - [`docs/mcp.md`](docs/mcp.md): Proxmox, Prometheus/Loki, SIEM and IDS data exposed to LLMs over MCP, with no tool that
   can write anything and per-key permissions on top.
 - [`docs/config-export.md`](docs/config-export.md): a nightly job that copies the config of the host and every guest into
@@ -39,6 +42,7 @@ flowchart LR
       MON[Monitoring LXC<br/>Prometheus · Grafana · Loki]
       GW[LLM gateway LXC<br/>LiteLLM + Postgres]
       AG[Agent VM<br/>Hermes agent + Aider loop]
+      CI[CI runner VM<br/>Gitea Actions, no LAN]
       AI[AI VM<br/>Ollama + Open WebUI]
       HA[Home Assistant VM]
       SIEM[Wazuh SIEM VM]
@@ -49,7 +53,8 @@ flowchart LR
   SW ==10G==> PVE
   AG -->|virtual key| GW
   AI -->|virtual key| GW
-  D -->|IDE key| GW
+  D -->|IDE key, coding workspaces| GW
+  CI -->|checkout| GIT
   GW -->|cloud APIs| ISP
   GW -->|local models| AI
   GW -->|MCP, bearer| MON
@@ -66,6 +71,7 @@ traffic between them. Remote access is over WireGuard, and the VPN port is the o
 |---|---|
 | [`docs/`](docs) | Write-ups, start here |
 | [`ai-gateway/`](ai-gateway) | LiteLLM config: model aliases, fallbacks, complexity router, MCP servers, budgets |
+| [`agent-workspaces/`](agent-workspaces) | Coder workspace dev services, egress firewall, agent rules, gitleaks hooks, PR helper, CI runner config, firewall and workflow |
 | [`mcp/`](mcp) | Read-only homelab MCP server (Python), auth proxy, compose file |
 | [`agent-hardening/`](agent-hardening) | nftables egress allowlist per UID, systemd sandboxing drop-in |
 | [`config-export/`](config-export) | Nightly export: collector, redaction, secret scanner, systemd timer |
@@ -77,7 +83,7 @@ traffic between them. Remote access is over WireGuard, and the VPN port is the o
 
 Proxmox VE (LXC + KVM, ZFS) · MikroTik RouterOS (VLANs, WireGuard, port mirror) · Docker / Portainer · Nginx Proxy Manager ·
 Prometheus · Grafana · Loki · Alloy · Wazuh · Suricata · Zeek · LiteLLM · Ollama · Open WebUI · Hermes Agent · Aider ·
-Gitea · Coder · code-server · Home Assistant · Frigate · UrBackup · restic (off-site) · healthchecks.io
+Gitea · Gitea Actions · Coder · code-server · opencode · Playwright MCP · Mailpit · SearXNG · gitleaks · Home Assistant · Frigate · UrBackup · restic (off-site) · healthchecks.io
 
 ## License
 

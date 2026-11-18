@@ -1,0 +1,92 @@
+# CI on the homelab Gitea runner (isolated VM). Generated per repo by a small script.
+# gitleaks on the new commits; then per package: install, Prisma migrations against a throwaway Postgres,
+# lint, typecheck, unit tests, build. Lint and e2e are reported but don't fail the run yet (older repos have lint
+# debt to work through); typecheck, tests and build do.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: gitleaks (new commits)
+        shell: bash
+        run: |
+          v=8.30.1; sha=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          curl -fsSL --retry 5 -o /tmp/gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_x64.tar.gz"
+          echo "$sha  /tmp/gl.tgz" | sha256sum -c
+          tar xzf /tmp/gl.tgz -C /tmp gitleaks
+          if [ -n "$GITHUB_BASE_REF" ]; then git fetch -q origin "$GITHUB_BASE_REF"; range="origin/$GITHUB_BASE_REF..HEAD"; else range="HEAD~1..HEAD"; fi
+          /tmp/gitleaks git --redact --no-banner --log-opts="$range" .
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: .
+            pm: npm
+    services:
+      postgres:
+        image: timescale/timescaledb:2.30.2-pg17@sha256:b346edcdb51a1fd6020e3965e0bd1c9f3406fa6d5fbce1e28f4852587ef934e2
+        env:
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: app_test
+      redis:
+        image: redis:7.4.12-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    env:
+      CI: "true"
+      NODE_ENV: test
+      DATABASE_URL: postgresql://dev:dev@postgres:5432/app_test
+      DATABASE_URL_TEST: postgresql://dev:dev@postgres:5432/app_test
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ci-only-not-a-secret
+      ALLOW_SCRIPTS: "esbuild,@swc/core,prisma,@prisma/client,@prisma/engines,bcrypt,msgpackr-extract,puppeteer,unrs-resolver,@tailwindcss/oxide"
+      npm_config_fund: "false"
+      npm_config_audit: "false"
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.pkg }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: install
+        run: |
+          # npm 11 takes allow-scripts only from .npmrc for project installs (same list as the Coder workspaces)
+          echo "allow-scripts=$ALLOW_SCRIPTS" >> ~/.npmrc
+          if [ "${{ matrix.pm }}" = pnpm ]; then corepack enable && pnpm install --frozen-lockfile; else npm ci; fi
+      - name: wait for postgres
+        run: for i in $(seq 60); do (echo > /dev/tcp/postgres/5432) 2>/dev/null && exit 0; sleep 2; done; exit 1
+      - name: prisma generate + migrate
+        if: hashFiles(format('{0}/prisma/schema.prisma', matrix.pkg)) != ''
+        run: npx prisma generate && npx prisma migrate deploy
+      - name: lint (not blocking yet)
+        continue-on-error: true
+        run: npm run lint --if-present
+      - name: typecheck
+        run: |
+          # read package.json (npm run | grep -q breaks under pipefail: grep exits early, npm gets SIGPIPE)
+          t=$(node -p "const s=require('./package.json').scripts||{}; s.typecheck?'typecheck':(s['type-check']?'type-check':'')")
+          if [ -n "$t" ]; then npm run "$t"; else echo "no typecheck script"; fi
+      - name: unit tests
+        run: |
+          if grep -q '"jest"' package.json; then npm test -- --passWithNoTests; else npm test --if-present; fi
+      - name: build
+        run: npm run build --if-present
+      - name: e2e (not blocking yet)
+        continue-on-error: true
+        timeout-minutes: 10
+        # --forceExit: open handles (Discord/Redis clients) once kept jest alive for 25+ minutes
+        run: |
+          if node -e "process.exit((require('./package.json').scripts||{})['test:e2e']?0:1)"; then npm run test:e2e -- --forceExit; else echo "no e2e script"; fi

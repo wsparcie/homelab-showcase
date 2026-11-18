@@ -1,0 +1,27 @@
+# /etc/gitea-runner/config.yaml on the CI runner VM
+log:
+  level: info
+runner:
+  file: .runner
+  capacity: 1   # one job at a time: two parallel builds starved the small VM
+  timeout: 1h
+  fetch_timeout: 5s
+  fetch_interval: 2s
+  # job image pinned: node 24.22.1 (2026-10-28)
+  labels:
+    - "ubuntu-latest:docker://node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d78e9b8c50c179da923108ea"
+    - "node-24:docker://node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d78e9b8c50c179da923108ea"
+cache:
+  enabled: true
+  dir: /var/lib/gitea-runner/cache
+container:
+  network: ""
+  privileged: false
+  # per job container: a runaway build (npm, puppeteer's Chrome) must not starve the VM (it did once)
+  options: "--memory=4g --memory-swap=4g --pids-limit=4096"
+  # no host paths and no Docker socket inside job containers
+  valid_volumes: []
+  docker_host: ""
+  force_pull: false
+host:
+  workdir_parent: /var/lib/gitea-runner/work
