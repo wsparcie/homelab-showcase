@@ -32,6 +32,12 @@ flowchart LR
     ISP((ISP)) --- R[MikroTik router<br/>firewall, VLANs, WireGuard]
   end
   R ==10G trunk==> SW[MikroTik switch]
+  subgraph SITE2["Second site"]
+    R2[Consumer router<br/>Merlin firmware, USB disks]
+    REPO[(Encrypted restic<br/>repository)]
+    R2 --- REPO
+  end
+  R <==>|WireGuard| R2
   SW -.port mirror 1G.-> MIR
   subgraph PVE["Proxmox VE host · 2× Xeon, ~96 GB RAM, ZFS (SSD mirror + HDD RAIDZ2)"]
     direction TB
@@ -48,6 +54,8 @@ flowchart LR
       SIEM[Wazuh SIEM VM]
       MIR[IDS VM<br/>Suricata + Zeek]
       NVR[NVR LXC<br/>Frigate]
+      URB[Backup LXC<br/>UrBackup for family PCs]
+      BK[Host backup jobs<br/>ZFS snapshots · daily vzdump<br/>nightly critical · weekly full]
     end
   end
   SW ==10G==> PVE
@@ -60,9 +68,14 @@ flowchart LR
   GW -->|MCP, bearer| MON
   MIR --> SIEM
   MIR --> MON
+  URB --> BK
+  BK -->|restic over the tunnel| REPO
+  MON -->|SSH pull, router config| R2
+  BK -.->|start and finish pings| HC((external<br/>dead-man's switch))
 ```
 
-There are separate VLANs for management, servers, Wi-Fi clients, IoT and cameras. The router routes and filters
+The second site is a small router at another location, linked over WireGuard. It holds the off-site backup repository,
+and its own configuration is pulled back into the lab every week. There are separate VLANs for management, servers, Wi-Fi clients, IoT and cameras. The router routes and filters
 traffic between them. Remote access is over WireGuard, and the VPN port is the only thing forwarded from outside.
 
 ## Repository layout
