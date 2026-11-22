@@ -41,6 +41,27 @@ If any check fails it sends `/fail` with the reasons. If the host, the power or 
 pings stop and the alert comes from outside. Both off-site backup jobs ping their own checks too (`/start`, then the
 exit code), so I find out about a backup that never ran as well as one that failed.
 
+### The shutdown that wasn't
+
+The UPS daemon had been failing to start for over a month without my noticing. The monitor account's password contained
+a `#`, which the config parser reads as the start of a comment, so the line was malformed and the service refused to
+start. The practical effect: no automatic shutdown was armed at all. On a long outage the host would have run the
+battery flat and lost power mid-write, which is the one thing the UPS is there to prevent. Nothing was watching the
+watcher. The fix was an alphanumeric password in both config files, plus a notify script so on-battery, low-battery and
+shutdown events now reach chat. One caveat stays, and it's in the diagram: the fibre terminal isn't on the UPS, so the
+"on battery" message only gets out once mains power, and with it the internet, is back.
+
+### A reboot from memory pressure
+
+The host was configured to hand its guests far more RAM than it physically has, on the assumption they'd never all use
+it at once, with no swap and the ZFS cache already pinned at its floor. One afternoon a few guests grew at the same
+time. The host spent all its time trying to reclaim cache that couldn't shrink any further, one core stuck reclaiming,
+and then stalled and rebooted without a clean shutdown, so every service dropped together. There was no kernel panic, no
+out-of-memory line, no hardware event, just routine operations taking twenty seconds instead of a fraction of one and
+then the log going silent. The first fix was to give the largest, least busy guests a balloon floor, so the host can
+take back the RAM they aren't using, which it couldn't do while their memory was fixed. The real fix is to stop
+over-committing, which is now on the list next to adding swap.
+
 ## Backups: the important data goes off-site every night
 
 The layers are ZFS snapshots (hourly and daily), a daily `vzdump` of every guest, and a weekly encrypted restic copy to
@@ -75,6 +96,13 @@ running.
   metric, and can post to Discord. It doesn't pull anything.
 - `update-service.py <container> <repo:tag>` pulls the image, pins tag and digest in the right compose file (keeping a
   backup copy), recreates only that service and waits until it's healthy.
+
+The weekly check had a blind spot. It compares the digest a tag points to now with the one I pinned, which only moves
+for images pinned to a floating tag like `:latest` or `:2`. An image pinned to a specific version, `app:v1.2.3`, never
+showed an update, because that tag's digest doesn't move; a `v1.2.4` is a different tag the check never looked at. So I
+added a second pass that lists the registry's version tags with the same shape as the pinned one, keeps the ones newer
+than it, in the same major version and at least a week old, and reports the newest. Now the report covers both a moved
+floating tag and a genuinely newer release.
 
 My rules: a release has to be at least two weeks old unless it fixes a security issue, I do major versions one at a
 time, and I read the release notes first. To roll back, I put the old digest back and run `up -d`.

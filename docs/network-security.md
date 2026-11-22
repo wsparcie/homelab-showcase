@@ -49,6 +49,30 @@ I wrote decoders and rules for MikroTik RouterOS syslog (firewall drops, logins,
 image scans. Suricata alerts come in through the agent on the IDS VM. For automation there is a read-only nginx in front
 of the indexer that allows only `_search` and `_count` on the alert index (see [`mcp.md`](mcp.md)).
 
+### Keeping the alerts worth reading
+
+Every Suricata alert arrived at the same low severity: visible on the dashboard, never pushed to chat. That sounds safe
+until you realise a real scan would have looked exactly like the constant background noise, and I'd only have seen it if
+I happened to be looking. So I re-scored them in the SIEM. A high-severity signature, or more than twenty alerts from
+one source in two minutes (a scan or a brute-force, even when each alert on its own is dull), now reaches chat. Medium
+stays on the dashboard but ranks above the noise. Known-benign signatures, like a game server's download client
+announcing itself, are pinned back down by an exception so they don't cry wolf. I also disabled the stream-event rules
+in the sensor itself: they were more than half of all alerts, never actionable, and an artefact of a mirror that
+carries offloaded checksums. A test run with a scanner's user agent fired both the high-severity rule and the burst
+rule, and nothing else did.
+
+### A tunnel on its own interface, and a way back in
+
+The site-to-site link to the second building had quietly been added as an extra peer on the interface that the phones'
+mesh VPN manages. It worked, but it shared the phones' firewall treatment and could have been torn down by a firmware
+update that rebuilt that interface. I moved it onto its own WireGuard interface with its own subnet and its own rules,
+and removed the leftover peer and a duplicate route. The risk in a change like that is obvious: the far router is
+reachable only over the tunnel I'm rebuilding, so one wrong key locks me out of the building. Before touching it I
+opened an out-of-band path, SSH to that router over the independent mesh VPN, bound to the mesh interface only. The
+router's own failover script already swings traffic to the mesh when the tunnel is down, so the fallback was a few
+commands rather than a drive. The switch itself ran from a script that verifies the handshake and rolls back on its own
+if it doesn't come up.
+
 ## Monitoring
 
 Prometheus collects node, cAdvisor, blackbox HTTP/ICMP/DNS, RouterOS (via mktxp), UPS and backup metrics. Loki and Alloy
