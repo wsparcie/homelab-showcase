@@ -1,0 +1,116 @@
+<!--
+  Active Directory attack detection for the purple-team lab.
+  Install on the Wazuh server: /var/ossec/etc/rules/ad_rules.xml, then restart wazuh-manager.
+  IDs 100700-100799.
+
+  These sit on top of the stock Windows Security eventchannel rules. The parent group is
+  `windows_security` in current Wazuh; if a rule does not fire, confirm the decoded parent with
+  `/var/ossec/bin/wazuh-logtest` on a sample event and adjust <if_group>/<if_sid> accordingly.
+
+  Prerequisite on dc01: Advanced Audit Policy must log the events below (see ad-lab/Enable-Auditing.ps1):
+    4768 Kerberos TGT, 4769 Kerberos service ticket, 4662 directory-service access,
+    4624/4625 logon, 4728/4732/4756 group membership add.
+-->
+<group name="local,windows,ad_lab,">
+
+  <!-- ============================ Kerberoasting ============================
+       4769: a service ticket (TGS) was requested. RC4 (0x17) encryption on a ticket for a real
+       service account (SPN, not a machine account ending in $, not krbtgt) is the classic sign of
+       Kerberoasting: the attacker asks for the ticket to crack the service account's password offline. -->
+  <rule id="100700" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4769$</field>
+    <field name="win.eventdata.ticketEncryptionType">^0x17$</field>
+    <field name="win.eventdata.ticketOptions">^0x40810000$</field>
+    <field name="win.eventdata.status">^0x0$</field>
+    <field name="win.eventdata.serviceName" negate="yes" type="pcre2">(?i)(\$$|^krbtgt$)</field>
+    <description>Possible Kerberoasting: RC4 service ticket requested for $(win.eventdata.serviceName)</description>
+    <mitre><id>T1558.003</id></mitre>
+  </rule>
+
+  <!-- ============================ AS-REP Roasting =========================
+       4768: a TGT was requested. Pre-Authentication Type 0 means the account has Kerberos pre-auth
+       disabled (DONT_REQ_PREAUTH), so anyone can request its AS-REP and crack it offline. -->
+  <rule id="100701" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4768$</field>
+    <field name="win.eventdata.preAuthType">^0$</field>
+    <field name="win.eventdata.targetUserName" negate="yes" type="pcre2">(?i)\$$</field>
+    <description>Possible AS-REP Roasting: TGT requested without pre-auth for $(win.eventdata.targetUserName)</description>
+    <mitre><id>T1558.004</id></mitre>
+  </rule>
+
+  <!-- RC4 TGT (downgrade) as a weaker companion signal to the above. -->
+  <rule id="100702" level="6">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4768$</field>
+    <field name="win.eventdata.ticketEncryptionType">^0x17$</field>
+    <field name="win.eventdata.targetUserName" negate="yes" type="pcre2">(?i)\$$</field>
+    <description>RC4 TGT requested (encryption downgrade) for $(win.eventdata.targetUserName)</description>
+    <mitre><id>T1558</id></mitre>
+  </rule>
+
+  <!-- ============================ DCSync ==================================
+       4662: an operation was performed on a directory-service object. The replication control-access
+       rights (GUIDs below) being exercised by a principal that is NOT a domain controller is DCSync:
+       the attacker asks the DC to replicate password hashes (e.g. impacket-secretsdump).
+         1131f6aa-...  DS-Replication-Get-Changes
+         1131f6ad-...  DS-Replication-Get-Changes-All
+         89e95b76-...  DS-Replication-Get-Changes-In-Filtered-Set
+       A SACL on the domain object is required for 4662 to fire (see Enable-Auditing.ps1). -->
+  <rule id="100703" level="14">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4662$</field>
+    <field name="win.eventdata.properties" type="pcre2">(?i)(1131f6aa-9c07-11d1-f79f-00c04fc2dcd2|1131f6ad-9c07-11d1-f79f-00c04fc2dcd2|89e95b76-444d-4c62-991a-0facbeda640c)</field>
+    <field name="win.eventdata.subjectUserName" negate="yes" type="pcre2">(?i)\$$</field>
+    <description>Possible DCSync: replication rights used by non-DC account $(win.eventdata.subjectUserName)</description>
+    <mitre><id>T1003.006</id></mitre>
+  </rule>
+
+  <!-- ============================ Pass-the-Hash ===========================
+       4624 Logon Type 9 (NewCredentials) from the seclogo process with the Negotiate package is the
+       footprint of overpass-the-hash / runas /netonly tools (e.g. impacket, Mimikatz sekurlsa::pth). -->
+  <rule id="100704" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4624$</field>
+    <field name="win.eventdata.logonType">^9$</field>
+    <field name="win.eventdata.logonProcessName" type="pcre2">(?i)seclogo</field>
+    <field name="win.eventdata.authenticationPackageName" type="pcre2">(?i)Negotiate</field>
+    <description>Possible Pass-the-Hash: NewCredentials logon via seclogo for $(win.eventdata.targetUserName)</description>
+    <mitre><id>T1550.002</id></mitre>
+  </rule>
+
+  <!-- NTLM network logon with a blank key length — weak companion signal for lateral movement. -->
+  <rule id="100705" level="6">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID">^4624$</field>
+    <field name="win.eventdata.logonType">^3$</field>
+    <field name="win.eventdata.authenticationPackageName" type="pcre2">(?i)NTLM</field>
+    <field name="win.eventdata.keyLength">^0$</field>
+    <field name="win.eventdata.targetUserName" negate="yes" type="pcre2">(?i)(\$$|^ANONYMOUS LOGON$)</field>
+    <description>NTLM network logon with no session key for $(win.eventdata.targetUserName)</description>
+    <mitre><id>T1021.002</id></mitre>
+  </rule>
+
+  <!-- ===================== Privileged group change =======================
+       4728/4732/4756: a member was added to a security-enabled group. Flag the high-value ones. -->
+  <rule id="100706" level="12">
+    <if_group>windows_security</if_group>
+    <field name="win.system.eventID" type="pcre2">^(4728|4732|4756)$</field>
+    <field name="win.eventdata.targetUserName" type="pcre2">(?i)^(Domain Admins|Enterprise Admins|Administrators|Schema Admins|Account Operators)$</field>
+    <description>Member added to privileged group $(win.eventdata.targetUserName)</description>
+    <mitre><id>T1098</id></mitre>
+  </rule>
+
+  <!-- ===================== Correlation: roasting burst ===================
+       Several Kerberoast tickets for different services from one source within a minute (GetUserSPNs
+       requests every SPN at once). The lab has two roastable accounts, so the threshold is 2. -->
+  <rule id="100710" level="14" frequency="2" timeframe="60">
+    <if_matched_sid>100700</if_matched_sid>
+    <same_source_ip />
+    <different_field>win.eventdata.serviceName</different_field>
+    <description>Kerberoasting burst: several RC4 service tickets requested within a minute</description>
+    <mitre><id>T1558.003</id></mitre>
+  </rule>
+
+</group>

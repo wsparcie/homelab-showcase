@@ -23,6 +23,8 @@ names here are placeholders.
   digests with a weekly update report.
 - [`docs/network-security.md`](docs/network-security.md): a port mirror feeding Suricata and Zeek, Wazuh with custom
   RouterOS decoders, and how I tracked capture loss down to the queue of a tap interface on the hypervisor.
+- [`docs/ad-lab.md`](docs/ad-lab.md): an isolated Active Directory domain that a Kali VM attacks, with Sysmon, audit
+  policy and custom Wazuh rules for Kerberoasting, AS-REP roasting, DCSync, pass-the-hash and privileged group changes.
 
 ## Architecture
 
