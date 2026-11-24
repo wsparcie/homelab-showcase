@@ -39,12 +39,15 @@ flowchart LR
     REPO[(Encrypted restic<br/>repository)]
     R2 --- REPO
   end
-  R <==>|WireGuard| R2
+  R <==>|site-to-site WireGuard<br/>Tailscale fallback| R2
   SW -.port mirror 1G.-> MIR
   subgraph PVE["Proxmox VE host · 2× Xeon, ~96 GB RAM, ZFS (SSD mirror + HDD RAIDZ2)"]
     direction TB
     subgraph SVC["VLAN Servers"]
-      D[Docker host LXC<br/>~60 containers: media, cloud,<br/>docs, reverse proxy]
+      D[Docker host LXC<br/>~75 containers: media, cloud,<br/>docs, reverse proxy]
+      PAAS[Coolify LXC<br/>side-project apps]
+      DNS[DNS LXC<br/>AdGuard Home, Tailscale]
+      NAS[NAS LXC<br/>Samba]
       GIT[Git LXC<br/>Gitea]
       VW[Vault LXC<br/>Vaultwarden]
       MON[Monitoring LXC<br/>Prometheus · Grafana · Loki]
@@ -57,7 +60,14 @@ flowchart LR
       MIR[IDS VM<br/>Suricata + Zeek]
       NVR[NVR LXC<br/>Frigate]
       URB[Backup LXC<br/>UrBackup for family PCs]
+      WS[Workstation VMs<br/>Kasm, Arch]
+      KALI[Kali VM]
+      GAMES[Game server LXCs<br/>off by default]
       BK[Host backup jobs<br/>ZFS snapshots · daily vzdump<br/>nightly critical · weekly full]
+    end
+    subgraph LAB["VLAN Lab (isolated)"]
+      DC[Domain controller VM<br/>Windows Server 2025]
+      WIN[Workstation VM<br/>Windows 11, domain member]
     end
   end
   SW ==10G==> PVE
@@ -74,10 +84,13 @@ flowchart LR
   BK -->|restic over the tunnel| REPO
   MON -->|SSH pull, router config| R2
   BK -.->|start and finish pings| HC((external<br/>dead-man's switch))
+  KALI -->|attacks| LAB
+  LAB -->|agent ports only| SIEM
+  R2 -.->|RDP to the DC only| DC
 ```
 
 The second site is a small router at another location, linked over WireGuard. It holds the off-site backup repository,
-and its own configuration is pulled back into the lab every week. There are separate VLANs for management, servers, Wi-Fi clients, IoT and cameras. The router routes and filters
+and its own configuration is pulled back into the lab every week. There are separate VLANs for management, servers, Wi-Fi clients, IoT, cameras and an isolated Active Directory lab. The router routes and filters
 traffic between them. Remote access is over WireGuard, and the VPN port is the only thing forwarded from outside.
 
 ## Repository layout
