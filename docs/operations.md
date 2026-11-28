@@ -107,6 +107,26 @@ floating tag and a genuinely newer release.
 My rules: a release has to be at least two weeks old unless it fixes a security issue, I do major versions one at a
 time, and I read the release notes first. To roll back, I put the old digest back and run `up -d`.
 
+## Disk space and snapshots
+
+The SSD pool reached 80% the day after a run of deploys, and cleaning up inside the containers changed nothing. The
+deploy platform leaves a gigabyte or so of build cache and old images behind per deploy, so I pruned them, and the
+pool stayed where it was: the daily ZFS snapshots still referenced those blocks. Space comes back when the snapshot
+that holds it expires or is destroyed. The platform's own container had 14.5 GB tied up in snapshots, 11 GB of it from a
+single day of builds.
+
+What I do now:
+
+- Look at `usedbysnapshots` per dataset before blaming the guest: `zfs list -o name,used,usedbysnapshots,usedbydataset`.
+- For a container that churns, keep two daily snapshots instead of more, and rely on the nightly full backup for
+  anything older. Before destroying the snapshots I check that today's backup exists on the backup storage.
+- A weekly timer prunes build cache older than three days and images unused for a week, so the next snapshot doesn't
+  pin a fresh pile.
+- The lab's clean-state snapshots and the pool's other deliberate ones are never touched. A search-and-destroy over
+  "old" snapshots would have taken them too.
+
+An alert at 80% turned out to be exactly the right warning level: early enough to act, late enough not to nag.
+
 ## Moving the vault and the git server out of the big container
 
 One Docker host was running about 60 services. A hole in any of the media apps would have put an attacker one step

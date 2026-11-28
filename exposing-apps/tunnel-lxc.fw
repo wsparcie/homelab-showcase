@@ -1,0 +1,22 @@
+# Proxmox firewall for the tunnel container (/etc/pve/firewall/<vmid>.fw). Addresses are placeholders.
+# The ACCEPT rules must come before the DROP rules: they are evaluated top to bottom.
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+
+[RULES]
+# in: management network only
+IN SSH(ACCEPT) -source 10.10.10.0/24 -log nolog
+IN SSH(ACCEPT) -source 10.10.20.2 -log nolog
+IN ACCEPT -p icmp -log nolog
+# out: DNS, the SIEM agent, and one rule per published app (host and that app's port only)
+OUT ACCEPT -dest 10.10.20.2 -p udp -dport 53 -log nolog
+OUT ACCEPT -dest 10.10.20.2 -p tcp -dport 53 -log nolog
+OUT ACCEPT -dest 10.10.20.80 -p tcp -dport 1514 -log nolog # SIEM agent events
+OUT ACCEPT -dest 10.10.20.21 -p tcp -dport 3030 -log nolog # app A frontend
+OUT ACCEPT -dest 10.10.20.21 -p tcp -dport 3010 -log nolog # app B frontend
+# everything else private is unreachable, so the internet is the only other destination
+OUT DROP -dest 10.0.0.0/8 -log nolog
+OUT DROP -dest 172.16.0.0/12 -log nolog
+OUT DROP -dest 192.168.0.0/16 -log nolog

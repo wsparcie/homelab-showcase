@@ -23,6 +23,10 @@ names here are placeholders.
   digests with a weekly update report.
 - [`docs/network-security.md`](docs/network-security.md): a port mirror feeding Suricata and Zeek, Wazuh with custom
   RouterOS decoders, and how I tracked capture loss down to the queue of a tap interface on the hypervisor.
+- [`docs/exposing-apps.md`](docs/exposing-apps.md): publishing side projects without forwarding a port. An outbound-only
+  tunnel connector in its own container, a hypervisor firewall that assumes it is compromised, a login at the edge for
+  admin paths only, the visitor's real address through every proxy, and the checklist an app passes before it goes
+  online.
 - [`docs/ad-lab.md`](docs/ad-lab.md): an isolated Active Directory domain that a Kali VM attacks, with Sysmon, audit
   policy and custom Wazuh rules for Kerberoasting, AS-REP roasting, DCSync, pass-the-hash and privileged group changes.
 
@@ -47,6 +51,7 @@ flowchart LR
       D[Docker host LXC<br/>~75 containers: media, cloud,<br/>docs, reverse proxy]
       PAAS[Coolify LXC<br/>side-project apps]
       DNS[DNS LXC<br/>AdGuard Home, Tailscale]
+      TUN[Tunnel LXC<br/>cloudflared, default-drop firewall]
       NAS[NAS LXC<br/>Samba]
       GIT[Git LXC<br/>Gitea]
       VW[Vault LXC<br/>Vaultwarden]
@@ -71,6 +76,8 @@ flowchart LR
     end
   end
   SW ==10G==> PVE
+  TUN -->|one rule per published port| PAAS
+  TUN -.->|outbound only| ISP
   AG -->|virtual key| GW
   AI -->|virtual key| GW
   D -->|IDE key, coding workspaces| GW
@@ -91,13 +98,15 @@ flowchart LR
 
 The second site is a small router at another location, linked over WireGuard. It holds the off-site backup repository,
 and its own configuration is pulled back into the lab every week. There are separate VLANs for management, servers, Wi-Fi clients, IoT, cameras and an isolated Active Directory lab. The router routes and filters
-traffic between them. Remote access is over WireGuard, and the VPN port is the only thing forwarded from outside.
+traffic between them. Remote access is over WireGuard, and the VPN port is the only thing forwarded from outside. The few apps I publish
+reach the internet through an outbound-only tunnel in its own container, so the router still forwards nothing for them.
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
 | [`docs/`](docs) | Write-ups, start here |
+| [`exposing-apps/`](exposing-apps) | Tunnel connector unit, its default-drop firewall, the app host's port rules, nginx real-IP config |
 | [`ai-gateway/`](ai-gateway) | LiteLLM config: model aliases, fallbacks, complexity router, MCP servers, budgets |
 | [`agent-workspaces/`](agent-workspaces) | Coder workspace dev services, egress firewall, agent rules, gitleaks hooks, PR helper, CI runner config, firewall and workflow |
 | [`mcp/`](mcp) | Read-only homelab MCP server (Python), auth proxy, compose file |
@@ -111,7 +120,7 @@ traffic between them. Remote access is over WireGuard, and the VPN port is the o
 
 Proxmox VE (LXC + KVM, ZFS) · MikroTik RouterOS (VLANs, WireGuard, port mirror) · Docker / Portainer · Nginx Proxy Manager ·
 Prometheus · Grafana · Loki · Alloy · Wazuh · Suricata · Zeek · LiteLLM · Ollama · Open WebUI · Hermes Agent · Aider ·
-Gitea · Gitea Actions · Coder · code-server · opencode · Playwright MCP · Mailpit · SearXNG · gitleaks · Home Assistant · Frigate · UrBackup · restic (off-site) · healthchecks.io
+Cloudflare Tunnel and Access · Gitea · Gitea Actions · Coder · code-server · opencode · Playwright MCP · Mailpit · SearXNG · gitleaks · Home Assistant · Frigate · UrBackup · restic (off-site) · healthchecks.io
 
 ## License
 
